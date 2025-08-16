@@ -1,4 +1,6 @@
 import { Context } from 'hono';
+import { Sha256 } from '@aws-crypto/sha256-js';
+import { SignatureV4 } from '@aws-sdk/signature-v4';
 
 /**
  * 用户兴趣接口处理函数
@@ -49,6 +51,9 @@ export const user_interest = async (c: Context) => {
       }
 
       await kv.put(user_id, JSON.stringify(interests));
+
+      // 检查是否需要调用AWS Lambda (只在POST请求中)
+      await checkAndInvokeLambda(c, user_id, interests);
 
       return c.json({
         message: '写入成功',
@@ -185,5 +190,97 @@ async function fetchInterestsFromSupabase(c: Context, user_id: string) {
   } catch (error) {
     console.error(`Error fetching interests from Supabase for user ${user_id}:`, error);
     return [];
+  }
+}
+
+// 检查是否需要调用AWS Lambda函数
+async function checkAndInvokeLambda(c: Context, user_id: string, interests: Array<{ postId: number, interest: string | null }>) {
+  try {
+    // 统计like和dislike的数量
+    const likeCount = interests.filter(item => item.interest === 'like').length;
+    const dislikeCount = interests.filter(item => item.interest === 'dislike').length;
+
+    // 检查是否都大于10
+    if (likeCount > 10 && dislikeCount > 10) {
+      // 调用AWS Lambda函数
+      await invokeAwsLambda(c, user_id);
+    }
+  } catch (error) {
+    console.error('Error checking and invoking Lambda:', error);
+  }
+}
+
+// 调用AWS Lambda函数
+async function invokeAwsLambda(c: Context, user_id: string) {
+  try {
+    const env = c.env as any;
+    const lambdaUrl = env.AWS_LAMBDA_URL;
+    const awsAccessKeyId = env.AWS_ACCESS_KEY_ID;
+    const awsSecretAccessKey = env.AWS_SECRET_ACCESS_KEY;
+    const awsRegion = env.AWS_REGION || 'us-east-1';
+    
+    if (!lambdaUrl) {
+      console.error('AWS Lambda URL not configured');
+      return;
+    }
+    
+    if (!awsAccessKeyId || !awsSecretAccessKey) {
+      console.error('AWS credentials not configured');
+      return;
+    }
+    
+    // 创建SignatureV4实例
+    const signer = new SignatureV4({
+      credentials: {
+        accessKeyId: awsAccessKeyId,
+        secretAccessKey: awsSecretAccessKey,
+      },
+      region: awsRegion,
+      service: 'execute-api',
+      sha256: Sha256,
+    });
+    
+    // 准备请求体
+    const requestBody = JSON.stringify({ "user_id": user_id });
+    console.log(`Request Body: ${requestBody}`);
+    
+    // 准备请求
+    const url = new URL(lambdaUrl);
+    // 引入 HttpRequest
+    // @ts-ignore
+    const { HttpRequest } = await import("@aws-sdk/protocol-http");
+    const request = new HttpRequest({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port ? parseInt(url.port) : undefined,
+      method: 'POST',
+      path: url.pathname,
+      headers: {
+        'Content-Type': 'application/json',
+        host: url.host,
+      },
+      body: requestBody,
+    });
+    
+    // 签名请求
+    const signedRequest = await signer.sign(request);
+    
+    // 发送签名后的请求
+    // 注意：这里我们使用 signedRequest 中的所有属性，包括 body
+    const response = await fetch(lambdaUrl, {
+      method: signedRequest.method,
+      headers: signedRequest.headers,
+      body: requestBody,
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Failed to invoke AWS Lambda: ${response.status} ${errorText}`);
+    }
+    else {
+      console.log(`Successfully invoked AWS Lambda for user ${user_id}`);
+    }
+  } catch (error) {
+    console.error(`Error invoking AWS Lambda for user ${user_id}:`, error);
   }
 }
