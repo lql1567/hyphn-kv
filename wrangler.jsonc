@@ -42,8 +42,26 @@
 	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
 	"kv_namespaces": [
 		{
-			"binding": "hpyhn-kv",
-			"id": "1e5fac713d064cb5aefa5f3b0052ed46"
+			"binding": "HPYHN_KV",
+			"id": "1e5fac713d064cb5aefa5f3b0052ed46",
+      "preview_id": "1e5fac713d064cb5aefa5f3b0052ed46"
+		},
+    {
+			"binding": "HPYHN_INTERESTS",
+			"id": "43a288977250407cafb92fb974d928a6",
+      "preview_id": "43a288977250407cafb92fb974d928a6"
 		}
-	]
+	],
+  "triggers": {
+    "crons": [
+      "0 * * * *", // 每小时执行一次，写 KV 到数据库
+      "30 * * * *" // 每小时第30分钟执行一次，刷数据库到 KV
+    ]
+  },
+  "vars": {
+    "REFRESH_KV_TOKEN": "abcf12e3596a972620659f0a7521d00460a4419a08e8aa2614d4cc80b367df35", // 仅用于非敏感数据
+	//"VERCEL_URL": "https://hpyhn.vercel.app",
+	"VERCEL_URL": "http://localhost:3000",
+	"SUPABASE_URL": "https://abmsimxmbakqrxxcqjet.supabase.co"
+  }
 }
