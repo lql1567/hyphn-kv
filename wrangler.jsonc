@@ -55,13 +55,14 @@
   "triggers": {
     "crons": [
       "0 * * * *", // 每小时执行一次，写 KV 到数据库
-      "30 * * * *" // 每小时第30分钟执行一次，刷数据库到 KV
+      "30 * * * *", // 每小时第30分钟执行一次，刷数据库到 KV
+	  "20 * * * *" // 每小时第20分钟执行一次，从hackernews同步数据到数据库
     ]
   },
   "vars": {
     "REFRESH_KV_TOKEN": "abcf12e3596a972620659f0a7521d00460a4419a08e8aa2614d4cc80b367df35", // 仅用于非敏感数据
-	//"VERCEL_URL": "https://hpyhn.vercel.app",
-	"VERCEL_URL": "http://localhost:3000",
+	"VERCEL_URL": "https://hpyhn.vercel.app",
+	//"VERCEL_URL": "http://localhost:3000",
 	"SUPABASE_URL": "https://abmsimxmbakqrxxcqjet.supabase.co"
   }
 }

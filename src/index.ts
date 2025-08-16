@@ -92,6 +92,18 @@ app.get('/api/sync-kv-to-db', tokenAuthMiddleware, async (c) => {
   }
 });
 
+// 为 /api/sync-hackernews-to-db 路由应用 token 校验中间件
+app.get('/api/sync-hackernews-to-db', tokenAuthMiddleware, async (c) => {
+  const env = c.env as Env;
+  try {
+    await syncHackerNewsToDb(env);
+    return c.json({ success: true, message: 'HackerNews synced to database successfully' });
+  } catch (error) {
+    console.error('Error syncing HackerNews to database:', error);
+    return c.json({ success: false, error: 'Failed to sync HackerNews to database' }, 500);
+  }
+});
+
 // 基础路由
 app.get('/', (c) => {
   return c.json({ 
@@ -108,9 +120,14 @@ export default {
     if (minute === 0) {
       // 定时将 KV 缓存写入数据库
       await writeKvToDb(env);
-    } else if (minute === 30) {
+    }
+    if (minute % 30 === 0) {
       // 定时从数据库刷数据到 KV 缓存
       await refreshKvFromDb(env);
+    }
+    if (minute % 20 === 0) {
+      // 定时从hackernews同步数据到数据库
+      await syncHackerNewsToDb(env);
     }
   },
 };
@@ -245,37 +262,6 @@ async function upsertInterestToSupabase(env: Env, user_id: string, post_id: numb
 async function refreshKvFromDb(env: Env) {
   const types = ['ask', 'front-page', 'news', 'show'];
   for (const type of types) {
-    const url = `${env.VERCEL_URL}/api/sync-${type}`;
-    console.log(`Fetching posts for type: ${type} from: ${url}`); // 添加日志跟踪
-    
-    // 添加 token 授权头
-    const headers = {
-      'Authorization': `Bearer ${env.CRON_SECRET}`
-    };
-    
-    const resp = await fetch(url, { headers });
-    if (!resp.ok) {
-      console.error(`Failed to fetch posts for type ${type}:`, resp.statusText);
-      continue;
-    }
-
-    // First get the response as text to see what we're dealing with
-    const textData = await resp.text();
-    console.log(`Raw response for type ${type}:`, 
-                  textData.substring(0, 100) + '...'); // Log first 100 chars
-    // 解析 JSON 数据
-    try {
-      const jsonData = JSON.parse(textData);
-      
-      // 从 syncResult 中提取对应类型的数据作为值
-      // 根据你的描述，syncResult中有一个与type同名的键，如news、ask等
-
-      console.log(`Extracted value for type ${jsonData.type}:`, jsonData.count ? `${jsonData.count} items` : '0 items');
-    } catch (error) {
-      console.error(`Failed to parse JSON for type ${type}:`, error);
-    }
-  }
-  for (const type of types) {
     try {
       const postsUrl = `${env.VERCEL_URL}/api/posts?type=${type}`;
       console.log(`Fetching posts from: ${postsUrl}`);
@@ -298,3 +284,37 @@ async function refreshKvFromDb(env: Env) {
   }
 }
 
+async function syncHackerNewsToDb(env: Env) {
+  try {
+    const types = ['ask', 'front-page', 'news', 'show'];
+    for (const type of types) {
+      const url = `${env.VERCEL_URL}/api/sync-${type}`;
+      console.log(`Fetching posts for type: ${type} from: ${url}`); // 添加日志跟踪
+      
+      // 添加 token 授权头
+      const headers = {
+        'Authorization': `Bearer ${env.CRON_SECRET}`
+      };
+      
+      const resp = await fetch(url, { headers });
+      if (!resp.ok) {
+        console.error(`Failed to fetch posts for type ${type}:`, resp.statusText);
+        continue;
+      }
+
+      // First get the response as text to see what we're dealing with
+      const textData = await resp.text();
+      console.log(`Raw response for type ${type}:`, 
+                    textData.substring(0, 100) + '...'); // Log first 100 chars
+      // 解析 JSON 数据
+      try {
+        const jsonData = JSON.parse(textData);
+        console.log(`Extracted value for type ${jsonData.type}:`, jsonData.count ? `${jsonData.count} items` : '0 items');
+      } catch (error) {
+        console.error(`Failed to parse JSON for type ${type}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error in syncHackerNewsToDb:', error);
+  }
+}
