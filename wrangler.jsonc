@@ -44,12 +44,17 @@
 		{
 			"binding": "HPYHN_KV",
 			"id": "1e5fac713d064cb5aefa5f3b0052ed46",
-      "preview_id": "1e5fac713d064cb5aefa5f3b0052ed46"
+      		"preview_id": "1e5fac713d064cb5aefa5f3b0052ed46"
 		},
-    {
+    	{
 			"binding": "HPYHN_INTERESTS",
 			"id": "43a288977250407cafb92fb974d928a6",
-      "preview_id": "43a288977250407cafb92fb974d928a6"
+			"preview_id": "43a288977250407cafb92fb974d928a6"
+		},
+    	{
+			"binding": "HPYHN_INTERESTS_SCORE",
+			"id": "67e6d94f03454c4c92e12d7c3e5a9572",
+			"preview_id": "67e6d94f03454c4c92e12d7c3e5a9572"
 		}
 	],
   "triggers": {
@@ -61,10 +66,11 @@
   },
   "vars": {
     "REFRESH_KV_TOKEN": "abcf12e3596a972620659f0a7521d00460a4419a08e8aa2614d4cc80b367df35", // 仅用于非敏感数据
-	//"VERCEL_URL": "https://hpyhn.vercel.app",
-	"VERCEL_URL": "http://localhost:3000",
+	"VERCEL_URL": "https://hpyhn.vercel.app",
+	//"VERCEL_URL": "http://localhost:3000",
 	"SUPABASE_URL": "https://abmsimxmbakqrxxcqjet.supabase.co",
-	"AWS_LAMBDA_URL": "https://1gasp8qvpd.execute-api.us-east-1.amazonaws.com/train_online",
+	"AWS_LAMBDA_TRAIN_URL": "https://1gasp8qvpd.execute-api.us-east-1.amazonaws.com/train_asyn",
+	"AWS_LAMBDA_SCORE_URL": "https://1gasp8qvpd.execute-api.us-east-1.amazonaws.com/score_asyn",
 	"AWS_REGION": "us-east-1"
   }
 }

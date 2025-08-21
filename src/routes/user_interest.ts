@@ -12,6 +12,7 @@ export const user_interest = async (c: Context) => {
   if (c.req.method === 'POST') {
     // 处理POST请求
     try {
+      const fnstarttime = Date.now();
       const body = await c.req.json<{ user_id: string, postId: number, interest: string | null }>();
       console.log('Request body:', body);
       const { user_id, postId, interest } = body;
@@ -31,30 +32,10 @@ export const user_interest = async (c: Context) => {
         }, 500);
       }
 
-      // 先读取已有数据
-      const existing = await kv.get(user_id);
-      let interests: Array<{ postId: number, interest: string | null }> = [];
-      if (existing) {
-        try {
-          interests = JSON.parse(existing);
-        } catch {
-          interests = [];
-        }
-      }
+      // 将所有后台操作放到 waitUntil 中执行
+      c.executionCtx.waitUntil(processUserInterestInBackground(c, user_id, postId, interest));
 
-      // 更新或添加
-      const idx = interests.findIndex(item => item.postId === postId);
-      if (idx >= 0) {
-        interests[idx].interest = interest;
-      } else {
-        interests.push({ postId, interest });
-      }
-
-      await kv.put(user_id, JSON.stringify(interests));
-
-      // 检查是否需要调用AWS Lambda (只在POST请求中)
-      await checkAndInvokeLambda(c, user_id, interests);
-
+      console.log(`fn time duration ${Date.now() - fnstarttime} ms`);
       return c.json({
         message: '写入成功',
         user_id,
@@ -149,6 +130,45 @@ export const user_interest = async (c: Context) => {
   }
 };
 
+// 后台处理用户兴趣数据
+async function processUserInterestInBackground(c: Context, user_id: string, postId: number, interest: string | null) {
+  try {
+    const kv = c.env?.HPYHN_INTERESTS;
+    if (!kv) {
+      console.error('HPYHN_INTERESTS not configured');
+      return;
+    }
+
+    // 先读取已有数据
+    const existing = await kv.get(user_id);
+    let interests: Array<{ postId: number, interest: string | null }> = [];
+    if (existing) {
+      try {
+        interests = JSON.parse(existing);
+      } catch {
+        interests = [];
+      }
+    }
+
+    // 更新或添加
+    const idx = interests.findIndex(item => item.postId === postId);
+    if (idx >= 0) {
+      interests[idx].interest = interest;
+    } else {
+      interests.push({ postId, interest });
+    }
+
+    await kv.put(user_id, JSON.stringify(interests));
+
+    // 检查是否需要调用AWS Lambda
+    await checkAndInvokeLambda(c, user_id, interests);
+    
+    console.log(`Background processing completed for user ${user_id}, postId ${postId}`);
+  } catch (error) {
+    console.error(`Error in background processing for user ${user_id}:`, error);
+  }
+}
+
 // 从Supabase获取用户兴趣数据
 async function fetchInterestsFromSupabase(c: Context, user_id: string) {
   try {
@@ -203,7 +223,7 @@ async function checkAndInvokeLambda(c: Context, user_id: string, interests: Arra
     // 检查是否都大于10
     if (likeCount > 10 && dislikeCount > 10) {
       // 调用AWS Lambda函数
-      await invokeAwsLambda(c, user_id);
+      invokeAwsLambda(c, user_id);
     }
   } catch (error) {
     console.error('Error checking and invoking Lambda:', error);
@@ -214,7 +234,7 @@ async function checkAndInvokeLambda(c: Context, user_id: string, interests: Arra
 async function invokeAwsLambda(c: Context, user_id: string) {
   try {
     const env = c.env as any;
-    const lambdaUrl = env.AWS_LAMBDA_URL;
+    const lambdaUrl = env.AWS_LAMBDA_TRAIN_URL;
     const awsAccessKeyId = env.AWS_ACCESS_KEY_ID;
     const awsSecretAccessKey = env.AWS_SECRET_ACCESS_KEY;
     const awsRegion = env.AWS_REGION || 'us-east-1';

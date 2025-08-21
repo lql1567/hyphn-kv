@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { getPostsHandler } from './routes/posts';
 import { user_interest } from './routes/user_interest';
+import { user_interest_score, update_user_interest_score } from './routes/user_interest_score';
 
 // Cloudflare KV 命名空间类型定义
 interface KVNamespace {
@@ -16,6 +17,7 @@ interface KVNamespace {
 interface Env {
   HPYHN_KV: KVNamespace;
   HPYHN_INTERESTS: KVNamespace;
+  HPYHN_INTERESTS_SCORE: KVNamespace;
   REFRESH_KV_TOKEN: string; // 添加 token 环境变量
   VERCEL_URL: string; // 添加 Vercel URL 环境变量
   SUPABASE_URL: string; // Supabase URL
@@ -67,6 +69,8 @@ const tokenAuthMiddleware = async (c: any, next: any) => {
 app.get('/api/posts', getPostsHandler);
 app.get('/api/user-interests', user_interest);
 app.post('/api/user-interests', user_interest);
+app.get('/api/user-interest-score', user_interest_score);
+app.post('/api/update_user_interest_score', tokenAuthMiddleware, update_user_interest_score);
 
 // 为 /api/refresh-kv 路由应用 token 校验中间件
 app.get('/api/refresh-kv', tokenAuthMiddleware, async (c) => {
@@ -132,24 +136,91 @@ export default {
   },
 };
 
+// 批量删除兴趣记录
+async function batchDeleteInterestFromSupabase(env: Env, deleteBatch: Array<{ user_id: string, post_id: number }>) {
+  if (deleteBatch.length === 0) return;
+  
+  const supabaseUrl = env.SUPABASE_URL;
+  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Supabase environment variables not configured');
+  }
+  
+  // 构建批量删除的过滤条件
+  const filters = deleteBatch.map(item => `user_id=eq.${item.user_id};post_id=eq.${item.post_id}`).join(',');
+  
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/user_post_interests?or=(${filters})`,
+    {
+      method: 'DELETE',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to batch delete interests: ${response.status} ${errorText}`);
+  }
+  
+  console.log(`Batch deleted ${deleteBatch.length} interests`);
+}
+
+// 批量插入或更新兴趣记录
+async function batchUpsertInterestToSupabase(env: Env, upsertBatch: Array<{ user_id: string, post_id: number, interest_type: string }>) {
+  if (upsertBatch.length === 0) return;
+  
+  const supabaseUrl = env.SUPABASE_URL;
+  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Supabase environment variables not configured');
+  }
+  
+  // 使用 upsert 功能，通过设置 on_conflict 参数处理主键冲突
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/user_post_interests?on_conflict=user_id,post_id`,
+    {
+      method: 'POST',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates', // 允许更新重复项
+      },
+      body: JSON.stringify(upsertBatch),
+    }
+  );
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to batch upsert interests: ${response.status} ${errorText}`);
+  }
+  
+  console.log(`Batch upserted ${upsertBatch.length} interests`);
+}
+
 async function writeKvToDb(env: Env) {
-  // 实现你的 KV 到数据库同步逻辑
   try {
-    // 获取 KV 命名空间
     const kv = env.HPYHN_INTERESTS;
-    
-    // 列出所有 keys
     const keyList = await kv.list();
     const keys = keyList.keys;
     
     console.log(`Found ${keys.length} users in KV`);
+    
+    // 批量操作数组
+    const deleteBatch: Array<{ user_id: string, post_id: number }> = [];
+    const upsertBatch: Array<{ user_id: string, post_id: number, interest_type: string }> = [];
     
     // 遍历每个用户
     for (const key of keys) {
       const user_id = key.name;
       console.log(`Processing user: ${user_id}`);
       
-      // 获取用户的兴趣数据
       const value = await kv.get(user_id);
       if (!value) {
         console.log(`No data found for user: ${user_id}`);
@@ -169,12 +240,23 @@ async function writeKvToDb(env: Env) {
       // 处理每个兴趣项
       for (const item of interests) {
         try {
-          // 如果 interest 为 null，则从数据库中删除该项
+          // 如果 interest 为 null，则添加到删除批次
           if (item.interest === null) {
-            await deleteInterestFromSupabase(env, user_id, item.postId);
+            deleteBatch.push({ user_id, post_id: item.postId });
           } else {
-            // 否则插入或更新该项
-            await upsertInterestToSupabase(env, user_id, item.postId, item.interest);
+            // 否则添加到插入/更新批次
+            upsertBatch.push({ user_id, post_id: item.postId, interest_type: item.interest });
+          }
+          
+          // 当批次达到15条时，执行批量操作
+          if (deleteBatch.length >= 15) {
+            await batchDeleteInterestFromSupabase(env, deleteBatch);
+            deleteBatch.length = 0; // 清空批次
+          }
+          
+          if (upsertBatch.length >= 15) {
+            await batchUpsertInterestToSupabase(env, upsertBatch);
+            upsertBatch.length = 0; // 清空批次
           }
         } catch (error) {
           console.error(`Failed to process interest for user ${user_id}, postId ${item.postId}:`, error);
@@ -182,81 +264,22 @@ async function writeKvToDb(env: Env) {
       }
     }
     
-    console.log('Successfully synced KV to Supabase');
+    // 处理剩余的批次数据
+    if (deleteBatch.length > 0) {
+      await batchDeleteInterestFromSupabase(env, deleteBatch);
+    }
+    
+    if (upsertBatch.length > 0) {
+      await batchUpsertInterestToSupabase(env, upsertBatch);
+    }
+    
+    console.log('Successfully synced KV to Supabase with batch operations');
   } catch (error) {
     console.error('Error in writeKvToDb:', error);
     throw error;
   }
 }
 
-// 从 Supabase 删除兴趣记录
-async function deleteInterestFromSupabase(env: Env, user_id: string, post_id: number) {
-  // 这里需要使用你的 Supabase 客户端配置
-  // 假设你已经在环境变量中配置了 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY
-  const supabaseUrl = env.SUPABASE_URL;
-  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Supabase environment variables not configured');
-  }
-  
-  // 构建删除请求
-  const response = await fetch(
-    `${supabaseUrl}/rest/v1/user_post_interests?user_id=eq.${user_id}&post_id=eq.${post_id}`,
-    {
-      method: 'DELETE',
-      headers: {
-        'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to delete interest: ${response.status} ${errorText}`);
-  }
-  
-  console.log(`Deleted interest for user ${user_id}, post ${post_id}`);
-}
-
-// 向 Supabase 插入或更新兴趣记录
-async function upsertInterestToSupabase(env: Env, user_id: string, post_id: number, interest_type: string) {
-  // 这里需要使用你的 Supabase 客户端配置
-  const supabaseUrl = env.SUPABASE_URL;
-  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Supabase environment variables not configured');
-  }
-  
-  // 使用 upsert 功能，通过设置 on_conflict 参数处理主键冲突
-  const response = await fetch(
-    `${supabaseUrl}/rest/v1/user_post_interests?on_conflict=user_id,post_id`,
-    {
-      method: 'POST',
-      headers: {
-        'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates', // 允许更新重复项
-      },
-      body: JSON.stringify({
-        user_id: user_id,
-        post_id: post_id,
-        interest_type: interest_type,
-      }),
-    }
-  );
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to upsert interest: ${response.status} ${errorText}`);
-  }
-  
-  console.log(`Upserted interest for user ${user_id}, post ${post_id}, interest ${interest_type}`);
-}
 
 // 刷新 KV 缓存
 async function refreshKvFromDb(env: Env) {
@@ -278,6 +301,23 @@ async function refreshKvFromDb(env: Env) {
       // 将 posts 数据存入 KV，type 作为 key
       await env.HPYHN_KV.put(`${type}`, JSON.stringify(postsData));
       console.log(`Stored posts for type ${type} in KV with key '${type}'`);
+
+      // 清空 HPYHN_INTERESTS_SCORE KV
+      try {
+        const scoreKv = env.HPYHN_INTERESTS_SCORE;
+        const keyList = await scoreKv.list();
+        const keys = keyList.keys;
+        console.log(`Found ${keys.length} keys in HPYHN_INTERESTS_SCORE to delete`);
+
+        // 批量删除所有键
+        for (const key of keys) {
+          await scoreKv.delete(key.name);
+        }
+
+        console.log('Successfully cleared HPYHN_INTERESTS_SCORE KV');
+      } catch (error) {
+        console.error('Error clearing HPYHN_INTERESTS_SCORE KV:', error);
+      }
     } catch (error) {
       console.error(`Error fetching/storing posts for type ${type}:`, error);
     }
