@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { getPostsHandler } from './routes/posts';
 import { user_interest } from './routes/user_interest';
 import { user_interest_score, update_user_interest_score } from './routes/user_interest_score';
+import { dont_miss } from './routes/dont_miss';
 
 // Cloudflare KV 命名空间类型定义
 interface KVNamespace {
@@ -18,6 +19,8 @@ interface Env {
   HPYHN_KV: KVNamespace;
   HPYHN_INTERESTS: KVNamespace;
   HPYHN_INTERESTS_SCORE: KVNamespace;
+  HPYHN_DONTMISS_POSTS: KVNamespace; // Dont miss posts
+  HPYHN_FAVORITES_POSTS: KVNamespace;
   REFRESH_KV_TOKEN: string; // 添加 token 环境变量
   VERCEL_URL: string; // 添加 Vercel URL 环境变量
   SUPABASE_URL: string; // Supabase URL
@@ -41,7 +44,7 @@ const app = new Hono();
 
 // 配置 CORS 中间件
 const corsMiddleware = cors({
-  origin: ['http://localhost:3000', 'https://hpyhn.vercel.app'], // 替换为你的前端域名
+  origin: ['http://localhost:3000', 'http://192.168.0.53:3000' , 'https://hpyhn.vercel.app'], // 替换为你的前端域名
   credentials: true,
 });
 
@@ -71,6 +74,9 @@ app.get('/api/user-interests', user_interest);
 app.post('/api/user-interests', user_interest);
 app.get('/api/user-interest-score', user_interest_score);
 app.post('/api/update_user_interest_score', tokenAuthMiddleware, update_user_interest_score);
+app.post('/api/dont-miss', tokenAuthMiddleware, dont_miss);
+app.get('/api/dont-miss',  dont_miss);
+app.delete('/api/dont-miss',  dont_miss);
 
 // 为 /api/refresh-kv 路由应用 token 校验中间件
 app.get('/api/refresh-kv', tokenAuthMiddleware, async (c) => {
@@ -125,7 +131,7 @@ export default {
       // 定时将 KV 缓存写入数据库
       await writeKvToDb(env);
     }
-    if (minute % 30 === 0) {
+    if (minute === 30 || minute === 50 || minute === 10) {
       // 定时从数据库刷数据到 KV 缓存
       await refreshKvFromDb(env);
     }
@@ -136,37 +142,46 @@ export default {
   },
 };
 
-// 批量删除兴趣记录
-async function batchDeleteInterestFromSupabase(env: Env, deleteBatch: Array<{ user_id: string, post_id: number }>) {
+// 批量删除兴趣记录（修正版）
+async function batchDeleteInterestFromSupabase(
+  env: Env,
+  deleteBatch: Array<{ user_id: string; post_id: number }>
+) {
   if (deleteBatch.length === 0) return;
-  
+
   const supabaseUrl = env.SUPABASE_URL;
   const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  
+
   if (!supabaseUrl || !supabaseKey) {
     throw new Error('Supabase environment variables not configured');
   }
-  
-  // 构建批量删除的过滤条件
-  const filters = deleteBatch.map(item => `user_id=eq.${item.user_id};post_id=eq.${item.post_id}`).join(',');
-  
-  const response = await fetch(
-    `${supabaseUrl}/rest/v1/user_post_interests?or=(${filters})`,
-    {
-      method: 'DELETE',
-      headers: {
-        'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-  
+
+  // 修正：为每个条件添加括号并用逗号连接
+  const orFilters = deleteBatch
+    .map(
+      (item) =>
+        `and(user_id.eq.${item.user_id},post_id.eq.${item.post_id})`
+    )
+    .join(',');
+
+  const deleteUrl = `${supabaseUrl}/rest/v1/user_post_interests?or=(${encodeURIComponent(orFilters)})`;
+
+  const response = await fetch(deleteUrl, {
+    method: 'DELETE',
+    headers: {
+      apikey: supabaseKey,
+      Authorization: `Bearer ${supabaseKey}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed to batch delete interests: ${response.status} ${errorText}`);
+    throw new Error(
+      `Failed to batch delete interests: ${response.status} ${errorText}`
+    );
   }
-  
+
   console.log(`Batch deleted ${deleteBatch.length} interests`);
 }
 
@@ -237,6 +252,9 @@ async function writeKvToDb(env: Env) {
       
       console.log(`Found ${interests.length} interests for user: ${user_id}`);
       
+      // 用于存储清理后的兴趣数据
+      const cleanedInterests: Array<{ postId: number, interest: string | null }> = [];
+      
       // 处理每个兴趣项
       for (const item of interests) {
         try {
@@ -244,8 +262,9 @@ async function writeKvToDb(env: Env) {
           if (item.interest === null) {
             deleteBatch.push({ user_id, post_id: item.postId });
           } else {
-            // 否则添加到插入/更新批次
+            // 否则添加到插入/更新批次和清理后的数据
             upsertBatch.push({ user_id, post_id: item.postId, interest_type: item.interest });
+            cleanedInterests.push(item);
           }
           
           // 当批次达到15条时，执行批量操作
@@ -262,6 +281,15 @@ async function writeKvToDb(env: Env) {
           console.error(`Failed to process interest for user ${user_id}, postId ${item.postId}:`, error);
         }
       }
+      
+      // 处理完当前用户的所有兴趣项后，更新 KV 缓存
+      if (cleanedInterests.length > 0) {
+        await kv.put(user_id, JSON.stringify(cleanedInterests));
+        console.log(`Updated KV cache for user ${user_id} with ${cleanedInterests.length} interests`);
+      } else {
+        await kv.delete(user_id);
+        console.log(`Deleted KV cache for user ${user_id} (no interests left)`);
+      }
     }
     
     // 处理剩余的批次数据
@@ -273,13 +301,12 @@ async function writeKvToDb(env: Env) {
       await batchUpsertInterestToSupabase(env, upsertBatch);
     }
     
-    console.log('Successfully synced KV to Supabase with batch operations');
+    console.log('Successfully synced KV to Supabase with batch operations and cleaned null interests from cache');
   } catch (error) {
     console.error('Error in writeKvToDb:', error);
     throw error;
   }
 }
-
 
 // 刷新 KV 缓存
 async function refreshKvFromDb(env: Env) {

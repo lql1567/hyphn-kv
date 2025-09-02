@@ -55,13 +55,25 @@
 			"binding": "HPYHN_INTERESTS_SCORE",
 			"id": "67e6d94f03454c4c92e12d7c3e5a9572",
 			"preview_id": "67e6d94f03454c4c92e12d7c3e5a9572"
+		},
+    	{
+			"binding": "HPYHN_FAVORITES_POSTS",
+			"id": "0050d21aeaa14120b22fd350f7761f2c",
+			"preview_id": "0050d21aeaa14120b22fd350f7761f2c"
+		},
+    	{
+			"binding": "HPYHN_DONTMISS_POSTS",
+			"id": "6e737a1dea164290ae77468d72c854ab",
+			"preview_id": "1232354324322q23332"
 		}
 	],
   "triggers": {
     "crons": [
       "0 * * * *", // 每小时执行一次，写 KV 到数据库
-      "30 * * * *", // 每小时第30分钟执行一次，刷数据库到 KV
-	  "20 * * * *" // 每小时第20分钟执行一次，从hackernews同步数据到数据库
+      "10 * * * *", // 每小时第30分钟执行一次，刷数据库到 KV
+	  "20 * * * *", // 每小时第20分钟执行一次，从hackernews同步数据到数据库
+	  "30 * * * *", 
+	  "40 * * * *"
     ]
   },
   "vars": {
