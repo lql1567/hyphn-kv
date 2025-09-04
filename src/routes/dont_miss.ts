@@ -18,7 +18,7 @@
 3. 以user_id为key，查找HPYHN_INTERESTS_SCORE缓存中的数据，数据是一个json对象，
    这个对象里面查找key为dont-miss的数据，如果没有则插入第二步的json数据作为value，key为dont-miss
    如果有则进行整合去重。最后将结果更新到HPYHN_INTERESTS_SCORE缓存中
-
+   
 ### 代码实现
 
 */
@@ -36,6 +36,7 @@ interface KVNamespace {
 interface Env {
   HPYHN_DONTMISS_POSTS: KVNamespace;
   HPYHN_INTERESTS_SCORE: KVNamespace;
+  HPYHN_READED_POSTS: KVNamespace; // Add this new KV namespace
 }
 
 export const dont_miss = async (c: Context) => {
@@ -69,13 +70,29 @@ export const dont_miss = async (c: Context) => {
         return c.json({ success: false, error: 'Missing required parameters: user_id or posts (must be an array)' }, 400);
       }
 
+      // Retrieve read posts from HPYHN_READED_POSTS
+      const existingReadPostsData = await env.HPYHN_READED_POSTS.get(user_id);
+      const readPostIds: Set<string> = existingReadPostsData ? new Set(JSON.parse(existingReadPostsData)) : new Set();
+
+      // Filter out posts that have already been read
+      const newPosts = posts.filter((post: any) => !readPostIds.has(post.id.toString()));
+
+      if (newPosts.length === 0) {
+        return c.json({ success: true, message: 'All provided posts have already been read or no new posts to add.', user_id, posts: [] });
+      }
+
       // 1. 将报文解析成json然后以user_id为key，posts的值为value，
       // 组成的kv数据插入到名字为HPYHN_DONTMISS_POSTS的cloudflare workder KV缓存中
-      await env.HPYHN_DONTMISS_POSTS.put(user_id, JSON.stringify(posts));
+      const existingDontMissPosts = await env.HPYHN_DONTMISS_POSTS.get(user_id);
+      let dontMissPosts: any[] = existingDontMissPosts ? JSON.parse(existingDontMissPosts) : [];
+      const updatedDontMissPosts = [...dontMissPosts, ...newPosts];
+      const uniqueDontMissPosts = Array.from(new Map(updatedDontMissPosts.map(item => [item.id, item])).values());
+
+      await env.HPYHN_DONTMISS_POSTS.put(user_id, JSON.stringify(uniqueDontMissPosts));
       console.log(`Stored dont-miss posts for user ${user_id} in HPYHN_DONTMISS_POSTS`);
 
       // 2. 将posts里面的id和score，单独拉出来组成一个josn数组[{"id":..., "score":...}]
-      const idScorePosts = posts.map((post: any) => ({ id: post.id, score: post.score }));
+      const idScorePosts = newPosts.map((post: any) => ({ id: post.id, score: post.score }));
 
       // 3. 以user_id为key，查找HPYHN_INTERESTS_SCORE缓存中的数据，数据是一个json对象，
       //    这个对象里面查找key为dont-miss的数据，如果没有则插入第二步的json数据作为value，key为dont-miss
@@ -106,6 +123,15 @@ export const dont_miss = async (c: Context) => {
 
       if (!user_id || !postId) {
         return c.json({ success: false, error: 'Missing required parameters: user_id or postId' }, 400);
+      }
+
+      // Add postId to HPYHN_READED_POSTS
+      const existingReadPostsData = await env.HPYHN_READED_POSTS.get(user_id);
+      let readPostIds: string[] = existingReadPostsData ? JSON.parse(existingReadPostsData) : [];
+      if (!readPostIds.includes(postId.toString())) {
+        readPostIds.push(postId.toString());
+        await env.HPYHN_READED_POSTS.put(user_id, JSON.stringify(readPostIds));
+        console.log(`Added post ${postId} to HPYHN_READED_POSTS for user ${user_id}`);
       }
 
       // Remove from HPYHN_DONTMISS_POSTS

@@ -65,6 +65,11 @@
 			"binding": "HPYHN_DONTMISS_POSTS",
 			"id": "6e737a1dea164290ae77468d72c854ab",
 			"preview_id": "1232354324322q23332"
+		},
+    	{
+			"binding": "HPYHN_READED_POSTS",
+			"id": "7703cb5597624767992bddbceb2be54d",
+			"preview_id": "7703cb5597624767992bddbceb2be54d"
 		}
 	],
   "triggers": {
