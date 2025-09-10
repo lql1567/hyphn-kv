@@ -35,7 +35,9 @@ export const getPostsHandler = async (c: Context) => {
 
     // 处理favorites类型
     if (type === 'favorites') {
-      return c.json(await getFavoritesPosts(c, user_id!));
+      const favoritesList = await getFavoritesPosts(c, user_id!);
+      const filteredFavoritesList = await checkSubscriptionAndFilterPosts(c, user_id!, favoritesList);
+      return c.json(filteredFavoritesList);
     }
 
     // 处理dont-miss类型
@@ -51,7 +53,10 @@ export const getPostsHandler = async (c: Context) => {
       if (!kvValue) {
         return c.json([]);
       }
-      return c.json(JSON.parse(kvValue));
+      // For 'dont-miss' type, apply the subscription filter if user_id is present
+      const posts = JSON.parse(kvValue);
+      const filteredPosts = await checkSubscriptionAndFilterPosts(c, user_id!, posts);
+      return c.json(filteredPosts);
     }
 
     // 其他类型使用HPYHN_KV
@@ -69,7 +74,9 @@ export const getPostsHandler = async (c: Context) => {
       return c.json([]);
     }
 
-    return c.json(JSON.parse(kvValue));
+    const posts = JSON.parse(kvValue);
+    const filteredPosts = await checkSubscriptionAndFilterPosts(c, user_id, posts);
+    return c.json(filteredPosts);
   } catch (error) {
     console.error('Error in getPostsHandler:', error);
     return c.json({
@@ -224,4 +231,75 @@ async function fetchPendingChanges(interestsKv: any, user_id: string) {
     console.error('Error fetching pending changes:', error);
   }
   return [];
+}
+
+/**
+ * 检查用户订阅状态并根据订阅情况过滤帖子列表。
+ * 对于无订阅或订阅已过期的用户，只保留前三个帖子的 content_summary 字段，
+ * 其余帖子的 content_summary 字段设置为 null。
+ */
+async function checkSubscriptionAndFilterPosts(c: Context, user_id: string | undefined, posts: any[]) {
+  // If no user_id is provided, treat as not subscribed and apply filtering
+  if (!user_id) {
+    return posts.map((post, index) => {
+      if (index >= 5) {
+        return { ...post, summary_comments: [] };
+      }
+      return post;
+    });
+  }
+
+  const env = c.env as any;
+  const supabaseUrl = env.SUPABASE_URL;
+  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    console.error('Supabase environment variables not configured for subscription check');
+    return posts; // Return original posts if Supabase is not configured
+  }
+
+  try {
+    const response = await fetch(
+      `${supabaseUrl}/rest/v1/subscriptions?user_id=eq.${user_id}&select=status,current_period_end`,
+      {
+        method: 'GET',
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Supabase subscription request failed: ${response.status} ${errorText}`);
+      return posts; // Return original posts on error
+    }
+
+    const data = await response.json();
+    const subscription = data[0]; // Assuming one subscription per user
+
+    const now = new Date();
+    let isSubscribed = false;
+
+    if (subscription && subscription.status === 'active' && new Date(subscription.current_period_end) > now) {
+      isSubscribed = true;
+    }
+
+    if (!isSubscribed) {
+      // User is not subscribed or subscription expired, filter summary_comments
+      return posts.map((post, index) => {
+        if (index >= 5) {
+          return { ...post, summary_comments: [] };
+        }
+        return post;
+      });
+    }
+
+    return posts; // Return original posts if subscribed
+  } catch (error) {
+    console.error('Error checking subscription:', error);
+    return posts; // Return original posts on error
+  }
 }

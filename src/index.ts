@@ -44,7 +44,7 @@ const app = new Hono();
 
 // 配置 CORS 中间件
 const corsMiddleware = cors({
-  origin: ['http://localhost:3000', 'http://192.168.0.53:3000' , 'https://hpyhn.vercel.app'], // 替换为你的前端域名
+  origin: ['http://localhost:3000', 'http://192.168.0.53:3000' , 'https://hpyhn.vercel.app', 'https://hpyhn.xyz'], // 替换为你的前端域名
   credentials: true,
 });
 
@@ -69,14 +69,14 @@ const tokenAuthMiddleware = async (c: any, next: any) => {
 };
 
 // 注册API路由
-app.get('/api/posts', getPostsHandler);
-app.get('/api/user-interests', user_interest);
-app.post('/api/user-interests', user_interest);
-app.get('/api/user-interest-score', user_interest_score);
-app.post('/api/update_user_interest_score', tokenAuthMiddleware, update_user_interest_score);
+app.get('/worker/api/posts', getPostsHandler);
+app.get('/worker/api/user-interests', user_interest);
+app.post('/worker/api/user-interests', user_interest);
+app.get('/worker/api/user-interest-score', user_interest_score);
+app.post('/worker/api/update_user_interest_score', tokenAuthMiddleware, update_user_interest_score);
 app.post('/api/dont-miss', tokenAuthMiddleware, dont_miss);
-app.get('/api/dont-miss',  dont_miss);
-app.delete('/api/dont-miss',  dont_miss);
+app.get('/worker/api/dont-miss',  dont_miss);
+app.delete('/worker/api/dont-miss',  dont_miss);
 
 // 为 /api/refresh-kv 路由应用 token 校验中间件
 app.get('/api/refresh-kv', tokenAuthMiddleware, async (c) => {
@@ -131,13 +131,13 @@ export default {
       // 定时将 KV 缓存写入数据库
       await writeKvToDb(env);
     }
-    if (minute === 30 || minute === 50 || minute === 10) {
+    if (minute === 20 || minute === 40 || minute === 0) {
       // 定时从数据库刷数据到 KV 缓存
       await refreshKvFromDb(env);
     }
     if (minute % 20 === 0) {
       // 定时从hackernews同步数据到数据库
-      await syncHackerNewsToDb(env);
+      //await syncHackerNewsToDb(env);
     }
   },
 };

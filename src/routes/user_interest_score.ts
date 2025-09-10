@@ -22,6 +22,18 @@ export const user_interest_score = async (c: Context) => {
       
       // 获取指定 postType 的值
       const interestScore = userInterests[postType] || [];
+
+      // 如果 interestScore 为空，也需要调用 AWS Lambda
+      if (interestScore.length === 0) {
+        console.log(`Interest score for user ${user_id} and postType ${postType} is empty, calling AWS Lambda`);
+        try {
+          await invokeAwsLambda(c, user_id, postType);
+        } catch (lambdaError) {
+          console.error(`Error calling AWS Lambda for user ${user_id} (empty interestScore):`, lambdaError);
+          // Depending on desired behavior, you might want to return an error or a specific message here.
+          // For now, it will log the error and proceed to return the empty array.
+        }
+      }
       
       return c.json(
         interestScore

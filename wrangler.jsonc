@@ -10,6 +10,13 @@
 	"observability": {
 		"enabled": true
 	},
+	"routes": [{
+			"pattern": "hpyhn.xyz/worker/*", 
+			"zone_id": "2e52930e6a02029b7d0eeffbed0a5ddc" 
+		}
+	],
+	//保留分配的 workers.dev 域名
+	"workers_dev": true,
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
@@ -70,15 +77,20 @@
 			"binding": "HPYHN_READED_POSTS",
 			"id": "7703cb5597624767992bddbceb2be54d",
 			"preview_id": "7703cb5597624767992bddbceb2be54d"
+		},
+    	{
+			"binding": "HPYHN_SUBSCRIPTION",
+			"id": "0a1b2ece1b694163a87de61b5ade2026",
+			"preview_id": "0a1b2ece1b694163a87de61b5ade2026"
 		}
 	],
   "triggers": {
     "crons": [
       "0 * * * *", // 每小时执行一次，写 KV 到数据库
-      "10 * * * *", // 每小时第30分钟执行一次，刷数据库到 KV
-	  "20 * * * *", // 每小时第20分钟执行一次，从hackernews同步数据到数据库
-	  "30 * * * *", 
-	  "40 * * * *"
+      "20 * * * *", // 每小时第30分钟执行一次，刷数据库到 KV
+	  "40 * * * *" // 每小时第20分钟执行一次，从hackernews同步数据到数据库
+	  //"30 * * * *", 
+	  //"40 * * * *"
     ]
   },
   "vars": {

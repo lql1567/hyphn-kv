@@ -14,7 +14,7 @@
 ### 业务逻辑
 1. 将报文解析成json然后以user_id为key，posts的值为value，组成的kv数据插入到名字为
    HPYHN_DONTMISS_POSTS的cloudflare workder KV缓存中
-2. 将posts里面的id和score，单独拉出来组成一个josn数组[{"id":..., "score":...}]
+2. 将posts里面的id和score，单独拉出来组成一个josn数组{"id1": score1, "id2": score2}
 3. 以user_id为key，查找HPYHN_INTERESTS_SCORE缓存中的数据，数据是一个json对象，
    这个对象里面查找key为dont-miss的数据，如果没有则插入第二步的json数据作为value，key为dont-miss
    如果有则进行整合去重。最后将结果更新到HPYHN_INTERESTS_SCORE缓存中
@@ -91,20 +91,22 @@ export const dont_miss = async (c: Context) => {
       await env.HPYHN_DONTMISS_POSTS.put(user_id, JSON.stringify(uniqueDontMissPosts));
       console.log(`Stored dont-miss posts for user ${user_id} in HPYHN_DONTMISS_POSTS`);
 
-      // 2. 将posts里面的id和score，单独拉出来组成一个josn数组[{"id":..., "score":...}]
-      const idScorePosts = newPosts.map((post: any) => ({ id: post.id, score: post.score }));
+      // 2. 将posts里面的id和score，单独拉出来组成一个josn对象{"id1": score1, "id2": score2}
+      const idScorePosts: { [key: string]: number } = newPosts.reduce((acc: { [key: string]: number }, post: any) => {
+        acc[post.id] = post.score;
+        return acc;
+      }, {});
 
       // 3. 以user_id为key，查找HPYHN_INTERESTS_SCORE缓存中的数据，数据是一个json对象，
       //    这个对象里面查找key为dont-miss的数据，如果没有则插入第二步的json数据作为value，key为dont-miss
       //    如果有则进行整合去重。最后将结果更新到HPYHN_INTERESTS_SCORE缓存中
       const existingInterestScoreData = await env.HPYHN_INTERESTS_SCORE.get(user_id);
-      let userInterestScores: { [key: string]: any[] } = existingInterestScoreData ? JSON.parse(existingInterestScoreData) : {};
+      let userInterestScores: { [key: string]: { [key: string]: number } } = existingInterestScoreData ? JSON.parse(existingInterestScoreData) : {};
 
-      const existingDontMiss = userInterestScores['dont-miss'] || [];
+      const existingDontMiss: { [key: string]: number } = userInterestScores['dont-miss'] || {};
 
       // Merge and de-duplicate
-      const mergedDontMiss = [...existingDontMiss, ...idScorePosts];
-      const uniqueDontMiss = Array.from(new Map(mergedDontMiss.map(item => [item.id, item])).values());
+      const uniqueDontMiss = { ...existingDontMiss, ...idScorePosts };
 
       userInterestScores['dont-miss'] = uniqueDontMiss;
 
@@ -119,60 +121,80 @@ export const dont_miss = async (c: Context) => {
     }
   } else if (c.req.method === 'DELETE') {
     try {
-      const { postId, user_id } = await c.req.json();
+      const { postIds, user_id } = await c.req.json(); // Changed postId to postIds
 
-      if (!user_id || !postId) {
-        return c.json({ success: false, error: 'Missing required parameters: user_id or postId' }, 400);
+      if (!user_id || !postIds || !Array.isArray(postIds)) { // Added check for array
+        return c.json({ success: false, error: 'Missing required parameters: user_id or postIds (must be an array)' }, 400);
       }
 
-      // Add postId to HPYHN_READED_POSTS
+      let postsDeletedFromDontMissPosts = 0;
+      let postsDeletedFromInterestScore = 0;
+      let postsAddedToReadPosts = 0;
+
+      // Add postIds to HPYHN_READED_POSTS
       const existingReadPostsData = await env.HPYHN_READED_POSTS.get(user_id);
       let readPostIds: string[] = existingReadPostsData ? JSON.parse(existingReadPostsData) : [];
-      if (!readPostIds.includes(postId.toString())) {
-        readPostIds.push(postId.toString());
+      const initialReadPostIdsLength = readPostIds.length;
+
+      postIds.forEach((postId: any) => {
+        if (!readPostIds.includes(postId.toString())) {
+          readPostIds.push(postId.toString());
+          postsAddedToReadPosts++;
+        }
+      });
+
+      if (postsAddedToReadPosts > 0) {
         await env.HPYHN_READED_POSTS.put(user_id, JSON.stringify(readPostIds));
-        console.log(`Added post ${postId} to HPYHN_READED_POSTS for user ${user_id}`);
+        console.log(`Added ${postsAddedToReadPosts} posts to HPYHN_READED_POSTS for user ${user_id}`);
       }
+
 
       // Remove from HPYHN_DONTMISS_POSTS
       const existingDontMissPosts = await env.HPYHN_DONTMISS_POSTS.get(user_id);
       let dontMissPosts: any[] = existingDontMissPosts ? JSON.parse(existingDontMissPosts) : [];
-      const initialLengthPosts = dontMissPosts.length;
-      dontMissPosts = dontMissPosts.filter(post => post.id !== postId);
+      const initialDontMissPostsLength = dontMissPosts.length;
 
-      if (dontMissPosts.length < initialLengthPosts) {
+      dontMissPosts = dontMissPosts.filter(post => !postIds.includes(post.id));
+      postsDeletedFromDontMissPosts = initialDontMissPostsLength - dontMissPosts.length;
+
+      if (postsDeletedFromDontMissPosts > 0) {
         await env.HPYHN_DONTMISS_POSTS.put(user_id, JSON.stringify(dontMissPosts));
-        console.log(`Removed post ${postId} for user ${user_id} from HPYHN_DONTMISS_POSTS`);
+        console.log(`Removed ${postsDeletedFromDontMissPosts} posts for user ${user_id} from HPYHN_DONTMISS_POSTS`);
       } else {
-        console.log(`Post ${postId} not found for user ${user_id} in HPYHN_DONTMISS_POSTS`);
+        console.log(`No posts found for user ${user_id} in HPYHN_DONTMISS_POSTS to delete.`);
       }
 
-
-      // Remove from HPYHN_INTERESTS_SCORE 'dont-miss' array
+      // Remove from HPYHN_INTERESTS_SCORE 'dont-miss' object
       const existingInterestScoreData = await env.HPYHN_INTERESTS_SCORE.get(user_id);
-      let userInterestScores: { [key: string]: any[] } = existingInterestScoreData ? JSON.parse(existingInterestScoreData) : {};
+      let userInterestScores: { [key: string]: { [key: string]: number } } = existingInterestScoreData ? JSON.parse(existingInterestScoreData) : {};
 
-      let existingDontMiss = userInterestScores['dont-miss'] || [];
-      const initialLengthInterest = existingDontMiss.length;
-      existingDontMiss = existingDontMiss.filter(item => item.id !== postId);
+      let existingDontMiss: { [key: string]: number } = userInterestScores['dont-miss'] || {};
+      const initialInterestScoreKeysCount = Object.keys(existingDontMiss).length;
 
-      if (existingDontMiss.length < initialLengthInterest) {
+      postIds.forEach((postId: any) => {
+        if (existingDontMiss[postId.toString()] !== undefined) {
+          delete existingDontMiss[postId.toString()];
+          postsDeletedFromInterestScore++;
+        }
+      });
+
+      if (postsDeletedFromInterestScore > 0) {
         userInterestScores['dont-miss'] = existingDontMiss;
         await env.HPYHN_INTERESTS_SCORE.put(user_id, JSON.stringify(userInterestScores));
-        console.log(`Removed post ${postId} for user ${user_id} from HPYHN_INTERESTS_SCORE 'dont-miss'`);
+        console.log(`Removed ${postsDeletedFromInterestScore} posts for user ${user_id} from HPYHN_INTERESTS_SCORE 'dont-miss'`);
       } else {
-        console.log(`Post ${postId} not found for user ${user_id} in HPYHN_INTERESTS_SCORE 'dont-miss'`);
+        console.log(`No posts found for user ${user_id} in HPYHN_INTERESTS_SCORE 'dont-miss' to delete.`);
       }
 
-      if (dontMissPosts.length < initialLengthPosts || existingDontMiss.length < initialLengthInterest) {
-        return c.json({ success: true, message: `Post ${postId} deleted successfully for user ${user_id}` });
+      if (postsDeletedFromDontMissPosts > 0 || postsDeletedFromInterestScore > 0 || postsAddedToReadPosts > 0) {
+        return c.json({ success: true, message: `Processed batch deletion for user ${user_id}. Deleted ${postsDeletedFromDontMissPosts} from HPYHN_DONTMISS_POSTS, ${postsDeletedFromInterestScore} from HPYHN_INTERESTS_SCORE, and added ${postsAddedToReadPosts} to HPYHN_READED_POSTS.` });
       } else {
-        return c.json({ success: false, message: `Post ${postId} not found for user ${user_id} in either cache.` }, 404);
+        return c.json({ success: false, message: `No specified posts found for user ${user_id} in either cache to delete.` }, 404);
       }
 
     } catch (error) {
       console.error('Error in dont_miss DELETE:', error);
-      return c.json({ success: false, error: 'Failed to delete dont-miss post', details: error instanceof Error ? error.message : 'Unknown error' }, 500);
+      return c.json({ success: false, error: 'Failed to delete dont-miss posts in batch', details: error instanceof Error ? error.message : 'Unknown error' }, 500);
     }
   }
 
