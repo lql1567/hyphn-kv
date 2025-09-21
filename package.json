@@ -1,5 +1,5 @@
 {
-  "name": "hpyhn-kv",
+  "name": "hpyhn-blog",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -9,12 +9,7 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
-    "chanfana": "^2.6.3",
-    "hono": "^4.6.20",
-    "zod": "^3.24.1",
-    "@aws-crypto/sha256-js": "^2.0.0",
-    "@aws-sdk/signature-v4": "^3.0.0",
-    "@aws-sdk/protocol-http": "^3.0.0"
+    "hono": "^4.6.20"
   },
   "devDependencies": {
     "@types/node": "22.13.0",
