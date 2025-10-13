@@ -242,7 +242,7 @@ async function checkSubscriptionAndFilterPosts(c: Context, user_id: string | und
   // If no user_id is provided, treat as not subscribed and apply filtering
   if (!user_id) {
     return posts.map((post, index) => {
-      if (index >= 5) {
+      if (index >= 30) {
         return { ...post, summary_comments: [] };
       }
       return post;
@@ -290,7 +290,7 @@ async function checkSubscriptionAndFilterPosts(c: Context, user_id: string | und
     if (!isSubscribed) {
       // User is not subscribed or subscription expired, filter summary_comments
       return posts.map((post, index) => {
-        if (index >= 5) {
+        if (index >= 30) {
           return { ...post, summary_comments: [] };
         }
         return post;
